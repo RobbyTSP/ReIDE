@@ -1,0 +1,18 @@
+# Compilation output binaries and objects
+ide
+*.o
+*.ppu
+*.so
+*.a
+*.dll
+*.dylib
+
+# Rust target directories
+target/
+Cargo.lock
+
+# IDE sessions and local logs
+.session_files
+.reide/
+*.log
+*.tmp
