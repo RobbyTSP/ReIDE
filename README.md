@@ -73,7 +73,6 @@ To open specific files directly in new tabs:
 - `ide.pas` — Main loop, X11 layout, text buffers, mouse/keyboard handler, PTY shell manager, and settings.
 - `font.pas` — Contains the 8x16 console bitmap font and the custom x86_64 assembly blitter routines (`DrawCharASM`).
 - `src/lib.rs` — Rust FFI library for tokenization, language detection, and custom tab icons.
-- `extract_font.py` — Utility script to extract system console fonts and format them as FPC arrays.
 - `Makefile` — Build script orchestrating Cargo and FPC compilers.
 
 ---
