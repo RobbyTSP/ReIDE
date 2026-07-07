@@ -2,7 +2,7 @@
 
 ReIDE is an ultra-lightweight, high-performance, and adaptive dark-mode IDE built from the ground up utilizing **x86_64 Assembly**, **Free Pascal (FPC)**, and **Rust**. It runs directly on the X11 windowing system with zero heavy dependencies (no electron, no web-tech, no massive UI frameworks).
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-AGPLv3-blue.svg)
 ![Language](https://img.shields.io/badge/language-Pascal%20%2F%20ASM%20%2F%20Rust-orange.svg)
 
 ---
@@ -80,4 +80,4 @@ To open specific files directly in new tabs:
 
 ## 📝 License
 
-This project is licensed under the MIT License.
+This project is licensed under the GNU Affero General Public License v3 (AGPLv3). See the [LICENSE](file:///home/robby/Pictures/IDEeditor/LICENSE) file for details.
