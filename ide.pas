@@ -132,6 +132,12 @@ var
   Logs: array[0..49] of String;
   LogsCount: Integer = 0;
 
+  // Plugin Manager variables
+  PluginFiles: array[0..15] of String;
+  PluginCount: Integer = 0;
+  PluginMenuOpen: Boolean = False;
+  ActivePluginIdx: Integer = -1;
+
 procedure TriggerLiveLanguageDetection; forward;
 
 // Log writer that pushes to ~/.reide/logs/ide.log and in-memory circular buffer
@@ -171,6 +177,102 @@ begin
       // ignore
     end;
   end;
+end;
+
+// Scans ~/.reide/plugins/ for any raw .asm files
+procedure ScanPlugins;
+var
+  SR: TSearchRec;
+  PluginsFolder: String;
+begin
+  PluginCount := 0;
+  PluginsFolder := GetEnvironmentVariable('HOME');
+  if PluginsFolder = '' then PluginsFolder := '/home/robby';
+  PluginsFolder += '/.reide/plugins/';
+  
+  if FindFirst(PluginsFolder + '*.asm', faAnyFile, SR) = 0 then
+  begin
+    repeat
+      if (SR.Name <> '.') and (SR.Name <> '..') then
+      begin
+        PluginFiles[PluginCount] := SR.Name;
+        Inc(PluginCount);
+        if PluginCount >= 16 then Break;
+      end;
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+  end;
+  AddLog('[INFO] Scanned plugins folder, found ' + IntToStr(PluginCount) + ' assembly plugins');
+end;
+
+// Compiles and runs the selected assembly plugin as a Unix stdout pipe filter
+procedure RunAssemblyPlugin(Idx: Integer);
+var
+  PluginsFolder, BaseName, AsmPath, ObjPath, BinPath: String;
+  Cmd: String;
+  Res: Integer;
+  TempInPath, TempOutPath: String;
+  SList: TStringList;
+begin
+  if (ActiveTab < 0) or (ActiveTab >= TabCount) then Exit;
+  if (Idx < 0) or (Idx >= PluginCount) then Exit;
+
+  PluginsFolder := GetEnvironmentVariable('HOME');
+  if PluginsFolder = '' then PluginsFolder := '/home/robby';
+  PluginsFolder += '/.reide/plugins/';
+
+  BaseName := ChangeFileExt(PluginFiles[Idx], '');
+  AsmPath := PluginsFolder + PluginFiles[Idx];
+  ObjPath := PluginsFolder + BaseName + '.o';
+  BinPath := PluginsFolder + BaseName;
+
+  // Compile if missing or if the source file is newer
+  if (not FileExists(BinPath)) or (FileAge(AsmPath) > FileAge(BinPath)) then
+  begin
+    AddLog('[INFO] Compiling assembly plugin: ' + PluginFiles[Idx]);
+    Cmd := 'nasm -f elf64 -o ' + ObjPath + ' ' + AsmPath + ' && ld -o ' + BinPath + ' ' + ObjPath;
+    Res := fpsystem(Cmd);
+    if Res <> 0 then
+    begin
+      AddLog('[ERROR] Assembly compilation failed with exit code: ' + IntToStr(Res));
+      Exit;
+    end;
+    AddLog('[INFO] Compilation successful: ' + BinPath);
+  end;
+
+  // Execute binary using temporary stdin/stdout redirection files
+  TempInPath := '/tmp/reide_plugin_in.txt';
+  TempOutPath := '/tmp/reide_plugin_out.txt';
+
+  try
+    Tabs[ActiveTab].Lines.SaveToFile(TempInPath);
+    
+    Cmd := BinPath + ' < ' + TempInPath + ' > ' + TempOutPath;
+    Res := fpsystem(Cmd);
+    if Res <> 0 then
+    begin
+      AddLog('[ERROR] Assembly plugin run failed with exit code: ' + IntToStr(Res));
+      Exit;
+    end;
+
+    SList := TStringList.Create;
+    try
+      SList.LoadFromFile(TempOutPath);
+      Tabs[ActiveTab].Lines.Clear;
+      Tabs[ActiveTab].Lines.AddStrings(SList);
+      Tabs[ActiveTab].Modified := True;
+      AddLog('[INFO] Executed plugin: ' + BaseName + ' on ' + Tabs[ActiveTab].FileName);
+      TriggerLiveLanguageDetection;
+    finally
+      SList.Free;
+    end;
+  except
+    on E: Exception do
+      AddLog('[ERROR] Plugin filtering failed: ' + E.Message);
+  end;
+
+  DeleteFile(TempInPath);
+  DeleteFile(TempOutPath);
 end;
 
 // Helper to fill rectangle in our virtual framebuffer
@@ -763,6 +865,8 @@ var
   TermTabX, TermTabWidth: Integer;
   PromptBoxX, PromptBoxY: Integer;
   LogsStartIdx, LogsIdx, LogsLineColor: DWORD;
+  ItemY: Integer;
+  ItemColor: DWORD;
 begin
   if (FrameBuffer = nil) or (Img = nil) then Exit;
   // 1. Clear background
@@ -825,8 +929,16 @@ begin
   end;
 
   // Render Top Menu Bar on the right side of the tab bar
-  FillRect(WINDOW_WIDTH - 334, 0, 334, TAB_BAR_HEIGHT, $181818);
-  FillRect(WINDOW_WIDTH - 334, TAB_BAR_HEIGHT - 1, 334, 1, $252526);
+  FillRect(WINDOW_WIDTH - 454, 0, 454, TAB_BAR_HEIGHT, $181818);
+  FillRect(WINDOW_WIDTH - 454, TAB_BAR_HEIGHT - 1, 454, 1, $252526);
+
+  // [ Plugins ]
+  FillRect(WINDOW_WIDTH - 444, 8, 100, 24, $2D2D2D);
+  FillRect(WINDOW_WIDTH - 444, 8, 100, 1, $808080);
+  FillRect(WINDOW_WIDTH - 444, 31, 100, 1, $808080);
+  FillRect(WINDOW_WIDTH - 444, 8, 1, 24, $808080);
+  FillRect(WINDOW_WIDTH - 345, 8, 1, 24, $808080);
+  DrawString(WINDOW_WIDTH - 432, 12, 'Plugins', $E0E0E0);
 
   // [ New ]
   FillRect(WINDOW_WIDTH - 324, 8, 55, 24, $2D2D2D);
@@ -1058,6 +1170,42 @@ begin
       FillRect(PromptBoxX + 30 + Length(PromptText) * FONT_WIDTH, PromptBoxY + 54, 2, 16, COLOR_CURSOR);
     end;
   end;
+
+  // Render Plugin List Dropdown Menu
+  if PluginMenuOpen then
+  begin
+    PromptBoxX := WINDOW_WIDTH - 444;
+    PromptBoxY := TAB_BAR_HEIGHT;
+    // Draw background
+    FillRect(PromptBoxX, PromptBoxY, 150, PluginCount * 24 + 10, $1E1E1E);
+    // Draw borders (always grey for the outer list dropdown)
+    FillRect(PromptBoxX, PromptBoxY, 150, 1, $808080);
+    FillRect(PromptBoxX, PromptBoxY + PluginCount * 24 + 9, 150, 1, $808080);
+    FillRect(PromptBoxX, PromptBoxY, 1, PluginCount * 24 + 10, $808080);
+    FillRect(PromptBoxX + 149, PromptBoxY, 1, PluginCount * 24 + 10, $808080);
+
+    for i := 0 to PluginCount - 1 do
+    begin
+      ItemY := PromptBoxY + 5 + i * 24;
+      
+      // Determine outline color for this specific plugin item
+      if i = ActivePluginIdx then
+        ItemColor := $F44747 // Red
+      else
+        ItemColor := $569CD6; // Blue
+
+      // Draw item box outline border
+      FillRect(PromptBoxX + 5, ItemY, 140, 1, ItemColor);
+      FillRect(PromptBoxX + 5, ItemY + 19, 140, 1, ItemColor);
+      FillRect(PromptBoxX + 5, ItemY, 1, 20, ItemColor);
+      FillRect(PromptBoxX + 144, ItemY, 1, 20, ItemColor);
+
+      TabTitle := ChangeFileExt(PluginFiles[i], '');
+      if Length(TabTitle) > 14 then
+        TabTitle := Copy(TabTitle, 1, 11) + '...';
+      DrawString(PromptBoxX + 12, ItemY + 2, TabTitle, $D4D4D4);
+    end;
+  end;
 end;
 
 procedure FlushFrameBuffer;
@@ -1181,6 +1329,8 @@ begin
     Tabs[ActiveTab].ScrollCol := CursorCol - ((WINDOW_WIDTH - 48) div FONT_WIDTH) + 1;
 
   TriggerLiveLanguageDetection;
+  if ActivePluginIdx <> -1 then
+    RunAssemblyPlugin(ActivePluginIdx);
 end;
 
 procedure HandleKeyPress(var Event: TXEvent);
@@ -1307,6 +1457,7 @@ var
   TabIdx: Integer;
   RelativeX: Integer;
   PromptBoxX, PromptBoxY: Integer;
+  ClickedIdx: Integer;
 begin
   ClickX := Event.xbutton.x;
   ClickY := Event.xbutton.y;
@@ -1342,11 +1493,52 @@ begin
     Exit;
   end;
 
+  // Handle dropdown menu selection clicks if open
+  if PluginMenuOpen then
+  begin
+    PromptBoxX := WINDOW_WIDTH - 444;
+    PromptBoxY := TAB_BAR_HEIGHT;
+    
+    // Check if click was inside the dropdown menu panel
+    if (ClickX >= PromptBoxX) and (ClickX < PromptBoxX + 150) and
+       (ClickY >= PromptBoxY) and (ClickY < PromptBoxY + PluginCount * 24 + 10) then
+    begin
+      ClickedIdx := (ClickY - PromptBoxY - 5) div 24;
+      if (ClickedIdx >= 0) and (ClickedIdx < PluginCount) then
+      begin
+        if ActivePluginIdx = ClickedIdx then
+        begin
+          ActivePluginIdx := -1;
+          AddLog('[INFO] Deactivated plugin filter');
+        end
+        else
+        begin
+          ActivePluginIdx := ClickedIdx;
+          AddLog('[INFO] Activated plugin filter: ' + PluginFiles[ActivePluginIdx]);
+          RunAssemblyPlugin(ActivePluginIdx);
+        end;
+      end;
+      PluginMenuOpen := False;
+      Exit;
+    end;
+    // Clicked outside the menu, close it
+    PluginMenuOpen := False;
+  end;
+
   if ClickY < TAB_BAR_HEIGHT then
   begin
     // Check Menu buttons first
+    // [ Plugins ]
+    if (ClickX >= WINDOW_WIDTH - 444) and (ClickX < WINDOW_WIDTH - 344) then
+    begin
+      ScanPlugins; // Re-scan folder on click to find new plugins dynamically
+      if PluginCount > 0 then
+        PluginMenuOpen := not PluginMenuOpen
+      else
+        AddLog('[INFO] No plugins found to display');
+    end
     // [ New ]
-    if (ClickX >= WINDOW_WIDTH - 324) and (ClickX < WINDOW_WIDTH - 269) then
+    else if (ClickX >= WINDOW_WIDTH - 324) and (ClickX < WINDOW_WIDTH - 269) then
     begin
       OpenFileInTab('untitled_' + IntToStr(TabCount + 1) + '.pas');
     end
@@ -1444,12 +1636,14 @@ var
   MaxFd: Integer;
   HomeDir: String;
   LogsFolder: String;
+  PluginsFolder: String;
 
 begin
   // Set up logs folder and file paths
   HomeDir := GetEnvironmentVariable('HOME');
   if HomeDir = '' then HomeDir := '/home/robby';
   LogsFolder := HomeDir + '/.reide/logs';
+  PluginsFolder := HomeDir + '/.reide/plugins';
   
   if ForceDirectories(LogsFolder) then
   begin
@@ -1459,6 +1653,12 @@ begin
   else
   begin
     WriteLn('Failed to create logs folder at: ' + LogsFolder);
+  end;
+
+  // Automatically create the plugins folder
+  if ForceDirectories(PluginsFolder) then
+  begin
+    AddLog('[INFO] ReIDE plugins folder set up at ' + PluginsFolder);
   end;
 
   // Open default display first to allow visual queries
@@ -1487,6 +1687,9 @@ begin
   begin
     LoadSession;
   end;
+
+  // Scan plugins initially
+  ScanPlugins;
 
   Win := XCreateSimpleWindow(Dis, RootWindow(Dis, ScreenHandle), 100, 100, WINDOW_WIDTH, WINDOW_HEIGHT, 1,
                            BlackPixel(Dis, ScreenHandle), BlackPixel(Dis, ScreenHandle));
