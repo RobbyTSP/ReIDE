@@ -68,6 +68,76 @@ To open specific files directly in new tabs:
 
 ---
 
+## 🔌 Creating Assembly Plugins
+
+ReIDE features a lightweight, Unix-style plugin manager. Plugins are written in raw **x86_64 Assembly** (`.asm`), stored in the `~/.reide/plugins/` directory, and dynamically scanned by the IDE.
+
+### How it works:
+1. **Dynamic Compilation**: When you click a plugin from the `[ Plugins ]` dropdown menu, the IDE compiles the raw `.asm` file on-the-fly using `nasm` and `ld`:
+   ```bash
+   nasm -f elf64 -o plugin.o plugin.asm && ld -o plugin plugin.o
+   ```
+2. **Text Filtering**: Active plugins act as text streams. The IDE pipes the current editor buffer into the plugin's `stdin`, captures the modified output from `stdout`, and replaces the editor buffer in real-time.
+3. **Live Toggling**: Click a plugin in the list to toggle it:
+   - **Active (Red outline)**: Runs reactively on every keypress (e.g., converting all typed text to uppercase live).
+   - **Inactive (Blue outline)**: Turns the plugin filter off.
+
+### Example: Uppercase Converter (`uppercase.asm`)
+Save this code in `~/.reide/plugins/uppercase.asm` to try it out:
+
+```nasm
+section .bss
+    buf resb 4096
+
+section .text
+    global _start
+
+_start:
+.loop:
+    ; read(0, buf, 4096)
+    mov rax, 0      ; sys_read
+    mov rdi, 0      ; stdin
+    mov rsi, buf    ; buffer
+    mov rdx, 4096   ; size
+    syscall
+
+    test rax, rax   ; EOF or error
+    jle .exit
+
+    mov r8, rax     ; save bytes read
+    mov rcx, 0      ; index
+
+.process:
+    cmp rcx, r8
+    jge .write       ; finished processing buffer, write it out
+    mov al, [rsi + rcx]
+    cmp al, 'a'
+    jl .skip
+    cmp al, 'z'
+    jg .skip
+    sub al, 32      ; to uppercase
+    mov [rsi + rcx], al
+.skip:
+    inc rcx
+    jmp .process
+
+.write:
+    ; write(1, buf, r8)
+    mov rax, 1      ; sys_write
+    mov rdi, 1      ; stdout
+    mov rsi, buf
+    mov rdx, r8     ; bytes to write
+    syscall
+    jmp .loop
+
+.exit:
+    mov rax, 60     ; sys_exit
+    mov rdi, 0      ; status 0
+    syscall
+```
+
+---
+
 ## 📁 Project Structure
 
 - `ide.pas` — Main loop, X11 layout, text buffers, mouse/keyboard handler, PTY shell manager, and settings.
